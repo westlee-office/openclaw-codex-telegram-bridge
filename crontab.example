@@ -7,11 +7,11 @@ PATH=/Users/westlee/.nvm/versions/node/v24.13.1/bin:/usr/local/bin:/opt/homebrew
 # Every morning 09:00 - Codex only
 0 9 * * * cd /Users/westlee/Projects/openclaw-codex-telegram-bridge && /usr/bin/python3 cron_run.py --mode codex --prompt-file cron/prompts/morning_briefing.txt --show-route >> logs/cron-codex.log 2>&1
 
-# Every workday 13:00 - Hybrid rewrite
-0 13 * * 1-5 cd /Users/westlee/Projects/openclaw-codex-telegram-bridge && /usr/bin/python3 cron_run.py --mode hybrid --prompt-file cron/prompts/lunch_checkin.txt --show-route >> logs/cron-hybrid.log 2>&1
+# Every workday 13:00 - Codex only
+0 13 * * 1-5 cd /Users/westlee/Projects/openclaw-codex-telegram-bridge && /usr/bin/python3 cron_run.py --mode codex --prompt-file cron/prompts/lunch_checkin.txt --show-route >> logs/cron-codex-afternoon.log 2>&1
 
-# Every evening 20:30 - Auto mode
-30 20 * * * cd /Users/westlee/Projects/openclaw-codex-telegram-bridge && /usr/bin/python3 cron_run.py --mode auto --prompt-file cron/prompts/evening_summary.txt --show-route >> logs/cron-auto.log 2>&1
+# Every evening 20:30 - Codex only
+30 20 * * * cd /Users/westlee/Projects/openclaw-codex-telegram-bridge && /usr/bin/python3 cron_run.py --mode codex --prompt-file cron/prompts/evening_summary.txt --show-route >> logs/cron-codex-evening.log 2>&1
 
 # Optional: start live Telegram bridge after reboot in codex mode.
 # @reboot cd /Users/westlee/Projects/openclaw-codex-telegram-bridge && ROUTER_MODE=codex /usr/bin/python3 bridge.py >> logs/bridge-codex.log 2>&1
