@@ -29,6 +29,7 @@ cp .env.example .env
 Edit `.env` with at least:
 
 - `TELEGRAM_BOT_TOKEN`
+- `TELEGRAM_DEFAULT_CHAT_ID` (for cron delivery)
 - Optional routing/settings values
 
 ## Run
@@ -58,6 +59,17 @@ python3 cron_run.py --mode codex --prompt "한 줄로 오늘 목표 알려줘"
 python3 cron_run.py --mode hybrid --chat-id <CHAT_ID> --prompt-file cron/prompts/lunch_checkin.txt --show-route
 python3 cron_run.py --mode auto --chat-id <CHAT_ID> --prompt-file cron/prompts/evening_summary.txt --show-route
 ```
+
+If `--chat-id` is omitted, `cron_run.py` uses `TELEGRAM_DEFAULT_CHAT_ID` from `.env`.
+
+Find your chat id:
+
+```bash
+cd /Users/westlee/Projects/openclaw-codex-telegram-bridge
+python3 telegram_chat_ids.py
+```
+
+If it says no updates, send any message to your bot first, then run again.
 
 Prepared template:
 

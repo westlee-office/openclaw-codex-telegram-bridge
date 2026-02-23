@@ -21,7 +21,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--prompt", help="Prompt text")
     parser.add_argument("--prompt-file", help="Read prompt from file")
     parser.add_argument("--stdin", action="store_true", help="Read prompt from stdin")
-    parser.add_argument("--chat-id", type=int, help="Telegram chat id to send output")
+    parser.add_argument(
+        "--chat-id",
+        type=int,
+        help="Telegram chat id to send output (fallback: TELEGRAM_DEFAULT_CHAT_ID)",
+    )
     parser.add_argument(
         "--history-file",
         default=".cron_history.json",
@@ -106,13 +110,19 @@ def main() -> int:
     if not prompt:
         raise ValueError("Prompt cannot be empty")
 
-    require_token = args.chat_id is not None
+    env_chat_raw = os.getenv("TELEGRAM_DEFAULT_CHAT_ID", "").strip()
+    env_chat_id = int(env_chat_raw) if env_chat_raw else None
+    target_chat_id = args.chat_id if args.chat_id is not None else env_chat_id
+
+    require_token = target_chat_id is not None
     cfg = Config.from_env(require_telegram_token=require_token)
     mode = (args.mode or cfg.router_mode).lower()
     if mode not in ALLOWED_MODES:
         raise ValueError(f"Invalid mode: {mode}")
 
     history_store: Dict[str, List[Tuple[str, str]]] = {}
+    if args.chat_id is None and target_chat_id is not None:
+        args.chat_id = target_chat_id
     history_key = build_history_key(args, mode)
     context: List[Tuple[str, str]] = []
     if not args.no_history:
@@ -134,10 +144,10 @@ def main() -> int:
         history_store[history_key] = rows
         save_history(args.history_file, history_store)
 
-    if args.chat_id is not None:
+    if target_chat_id is not None:
         if not cfg.telegram_token:
-            raise ValueError("TELEGRAM_BOT_TOKEN is required when --chat-id is used")
-        send_message(cfg.telegram_token, args.chat_id, final)
+            raise ValueError("TELEGRAM_BOT_TOKEN is required when chat id is used")
+        send_message(cfg.telegram_token, target_chat_id, final)
 
     print(final)
 
