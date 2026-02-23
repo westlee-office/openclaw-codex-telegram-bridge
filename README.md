@@ -13,6 +13,7 @@ This is a minimal Telegram bot bridge that routes replies through:
 - `hybrid`: OpenClaw draft, then Codex rewrites/finalizes every time.
 - In `codex` mode, each chat keeps a persistent Codex session id and auto-resumes.
 - Session state is compacted periodically and mirrored to `memory.md`.
+- Replies append a `context left` footer (estimated from latest Codex usage).
 
 ## Requirements
 
@@ -34,7 +35,7 @@ Edit `.env` with at least:
 - `TELEGRAM_DEFAULT_CHAT_ID` (for cron delivery)
 - `TELEGRAM_LOG_ENABLED=true`
 - `TELEGRAM_LOG_PATH=logs/telegram_history.jsonl`
-- Optional but recommended: `CODEX_USAGE_LIMIT_5H`, `CODEX_USAGE_LIMIT_1W`
+- Optional but recommended: `CONTEXT_WINDOW_TOKENS` (default `200000`)
 - Optional routing/settings values
 
 ## Run

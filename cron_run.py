@@ -12,7 +12,7 @@ from typing import Dict, List, Tuple
 from bridge import (
     ALLOWED_MODES,
     Config,
-    append_usage_footer,
+    append_context_footer,
     load_dotenv,
     log_telegram_event,
     route_answer,
@@ -143,7 +143,7 @@ def main() -> int:
     final = answer
     if args.show_route:
         final = f"{final}\n\n[route: {route_tag}]"
-    final = append_usage_footer(final, cfg)
+    final = append_context_footer(final, cfg)
 
     if not args.no_history:
         rows = history_store.get(history_key, [])

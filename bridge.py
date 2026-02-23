@@ -53,8 +53,7 @@ class Config:
     telegram_log_enabled: bool
     telegram_log_path: str
     codex_usage_log_path: str
-    usage_limit_5h: int
-    usage_limit_1w: int
+    context_window_tokens: int
     usage_include_cached_tokens: bool
     usage_footer_enabled: bool
     sessions_root_dir: str
@@ -116,8 +115,7 @@ class Config:
                 os.getenv("CODEX_USAGE_LOG_PATH", "logs/codex_usage.jsonl").strip()
                 or "logs/codex_usage.jsonl"
             ),
-            usage_limit_5h=max(0, env_int("CODEX_USAGE_LIMIT_5H", 0)),
-            usage_limit_1w=max(0, env_int("CODEX_USAGE_LIMIT_1W", 0)),
+            context_window_tokens=max(0, env_int("CONTEXT_WINDOW_TOKENS", 200000)),
             usage_include_cached_tokens=env_bool("USAGE_INCLUDE_CACHED_TOKENS", True),
             usage_footer_enabled=env_bool("USAGE_FOOTER_ENABLED", True),
             sessions_root_dir=(
@@ -297,8 +295,13 @@ def send_and_log(
     kind: str,
     extra: Optional[dict] = None,
     include_usage_footer: bool = False,
+    context_usage: Optional[Dict[str, int]] = None,
 ) -> None:
-    body = append_usage_footer(text, cfg) if include_usage_footer else text
+    body = (
+        append_context_footer(text, cfg, usage=context_usage)
+        if include_usage_footer
+        else text
+    )
     send_message(cfg.telegram_token, chat_id, body)
     payload = {"kind": kind, "chat_id": chat_id, "text": body}
     if extra:
@@ -340,6 +343,7 @@ def default_session_state(chat_id: int) -> dict:
         "since_compaction": 0,
         "compact_summary": "",
         "recent_turns": [],
+        "last_usage": {},
         "updated_at": utc_now_iso(),
     }
 
@@ -371,6 +375,13 @@ def normalize_session_state(chat_id: int, raw: Any) -> dict:
             ):
                 parsed.append([row[0], row[1]])
         state["recent_turns"] = parsed
+    usage = raw.get("last_usage")
+    if isinstance(usage, dict):
+        state["last_usage"] = {
+            "input_tokens": int(usage.get("input_tokens", 0) or 0),
+            "cached_input_tokens": int(usage.get("cached_input_tokens", 0) or 0),
+            "output_tokens": int(usage.get("output_tokens", 0) or 0),
+        }
     return state
 
 
@@ -477,14 +488,11 @@ def record_codex_usage(
         print(f"[warn] usage logging failed: {exc}", file=sys.stderr)
 
 
-def calculate_usage_windows(cfg: Config) -> Dict[str, int]:
-    now = time.time()
-    start_5h = now - 5 * 3600
-    start_1w = now - 7 * 24 * 3600
-    totals = {"used_5h": 0, "used_1w": 0}
+def latest_usage_from_log(cfg: Config) -> Optional[Dict[str, int]]:
     path = cfg.codex_usage_log_path
     if not os.path.exists(path):
-        return totals
+        return None
+    last: Optional[Dict[str, int]] = None
     try:
         with open(path, "r", encoding="utf-8") as f:
             for line in f:
@@ -495,39 +503,47 @@ def calculate_usage_windows(cfg: Config) -> Dict[str, int]:
                     obj = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                ts = obj.get("ts_unix")
-                total = obj.get("total_tokens")
-                if not isinstance(ts, (int, float)) or not isinstance(total, int):
+                usage = obj.get("usage")
+                if not isinstance(usage, dict):
                     continue
-                if ts >= start_1w:
-                    totals["used_1w"] += total
-                if ts >= start_5h:
-                    totals["used_5h"] += total
+                last = {
+                    "input_tokens": int(usage.get("input_tokens", 0) or 0),
+                    "cached_input_tokens": int(
+                        usage.get("cached_input_tokens", 0) or 0
+                    ),
+                    "output_tokens": int(usage.get("output_tokens", 0) or 0),
+                }
     except Exception:
-        return totals
-    return totals
+        return None
+    return last
 
 
-def format_usage_footer(cfg: Config) -> str:
+def format_context_footer(
+    cfg: Config,
+    *,
+    usage: Optional[Dict[str, int]] = None,
+) -> str:
     if not cfg.usage_footer_enabled:
         return ""
-    stats = calculate_usage_windows(cfg)
-
-    def fmt(used: int, limit: int) -> str:
-        if limit <= 0:
-            return f"{used:,}/(limit unset)"
-        pct = (used / limit) * 100 if limit else 0.0
-        return f"{used:,}/{limit:,} ({pct:.1f}%)"
-
-    return (
-        "[usage] "
-        f"5h {fmt(stats['used_5h'], cfg.usage_limit_5h)} | "
-        f"1w {fmt(stats['used_1w'], cfg.usage_limit_1w)}"
-    )
+    active_usage = usage if usage else latest_usage_from_log(cfg)
+    if not active_usage:
+        return "[context left] unknown"
+    used = usage_total_tokens(active_usage, cfg.usage_include_cached_tokens)
+    limit = cfg.context_window_tokens
+    if limit <= 0:
+        return f"[context left] unknown (set CONTEXT_WINDOW_TOKENS), used~{used:,}"
+    left = max(limit - used, 0)
+    pct = (left / limit) * 100 if limit else 0.0
+    return f"[context left] {left:,}/{limit:,} ({pct:.1f}%)"
 
 
-def append_usage_footer(text: str, cfg: Config) -> str:
-    footer = format_usage_footer(cfg)
+def append_context_footer(
+    text: str,
+    cfg: Config,
+    *,
+    usage: Optional[Dict[str, int]] = None,
+) -> str:
+    footer = format_context_footer(cfg, usage=usage)
     if not footer:
         return text
     clean = (text or "").strip()
@@ -1021,6 +1037,15 @@ def codex_turn_with_session(
         save_session_state(cfg, chat_id, state)
         return f"[codex error]\n{codex.error}", "codex_error", state
 
+    if codex.usage:
+        state["last_usage"] = {
+            "input_tokens": int(codex.usage.get("input_tokens", 0) or 0),
+            "cached_input_tokens": int(
+                codex.usage.get("cached_input_tokens", 0) or 0
+            ),
+            "output_tokens": int(codex.usage.get("output_tokens", 0) or 0),
+        }
+
     session_id = codex.session_id or active_session_id
     if session_id:
         state["active_codex_session_id"] = session_id
@@ -1185,6 +1210,7 @@ def main() -> int:
                     help_text,
                     kind="command_reply",
                     include_usage_footer=True,
+                    context_usage=state.get("last_usage"),
                     extra={"command": "help", "update_id": update_id, "reply_to_message_id": msg_id},
                 )
                 continue
@@ -1199,6 +1225,7 @@ def main() -> int:
                         f"Mode set to: {mode_by_chat[chat_id]}",
                         kind="command_reply",
                         include_usage_footer=True,
+                        context_usage=state.get("last_usage"),
                         extra={"command": "mode", "update_id": update_id, "reply_to_message_id": msg_id},
                     )
                 else:
@@ -1208,6 +1235,7 @@ def main() -> int:
                         "Usage: /mode auto|claw|codex|hybrid",
                         kind="command_reply",
                         include_usage_footer=True,
+                        context_usage=state.get("last_usage"),
                         extra={"command": "mode", "update_id": update_id, "reply_to_message_id": msg_id},
                     )
                 continue
@@ -1219,6 +1247,7 @@ def main() -> int:
                     session_status_text(chat_id, state),
                     kind="command_reply",
                     include_usage_footer=True,
+                    context_usage=state.get("last_usage"),
                     extra={"command": "session", "update_id": update_id, "reply_to_message_id": msg_id},
                 )
                 continue
@@ -1232,6 +1261,7 @@ def main() -> int:
                         "Usage: /resume <session_id>",
                         kind="command_reply",
                         include_usage_footer=True,
+                        context_usage=state.get("last_usage"),
                         extra={"command": "resume", "update_id": update_id, "reply_to_message_id": msg_id},
                     )
                 else:
@@ -1243,6 +1273,7 @@ def main() -> int:
                         f"Resumed session: {state['active_codex_session_id']}",
                         kind="command_reply",
                         include_usage_footer=True,
+                        context_usage=state.get("last_usage"),
                         extra={"command": "resume", "update_id": update_id, "reply_to_message_id": msg_id},
                     )
                 continue
@@ -1257,6 +1288,7 @@ def main() -> int:
                     state["archived_codex_session_ids"] = archived[-20:]
                 state["active_codex_session_id"] = ""
                 state["since_compaction"] = 0
+                state["last_usage"] = {}
                 save_session_state(cfg, chat_id, state)
                 send_and_log(
                     cfg,
@@ -1264,6 +1296,7 @@ def main() -> int:
                     "Started a fresh session. Previous session archived.",
                     kind="command_reply",
                     include_usage_footer=True,
+                    context_usage=state.get("last_usage"),
                     extra={"command": "newsession", "update_id": update_id, "reply_to_message_id": msg_id},
                 )
                 continue
@@ -1277,6 +1310,7 @@ def main() -> int:
                     truncate_text(body, 3000),
                     kind="command_reply",
                     include_usage_footer=True,
+                    context_usage=state.get("last_usage"),
                     extra={"command": "memory", "update_id": update_id, "reply_to_message_id": msg_id},
                 )
                 continue
@@ -1296,6 +1330,7 @@ def main() -> int:
                     status_text,
                     kind="command_reply",
                     include_usage_footer=True,
+                    context_usage=state.get("last_usage"),
                     extra={"command": "status", "update_id": update_id, "reply_to_message_id": msg_id},
                 )
                 continue
@@ -1332,6 +1367,7 @@ def main() -> int:
                 answer,
                 kind="assistant_reply",
                 include_usage_footer=True,
+                context_usage=state.get("last_usage"),
                 extra={
                     "mode": active_mode,
                     "route_tag": route_tag,
