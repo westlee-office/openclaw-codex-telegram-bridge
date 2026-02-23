@@ -11,6 +11,8 @@ This is a minimal Telegram bot bridge that routes replies through:
 - `claw`: OpenClaw only.
 - `codex`: Codex only.
 - `hybrid`: OpenClaw draft, then Codex rewrites/finalizes every time.
+- In `codex` mode, each chat keeps a persistent Codex session id and auto-resumes.
+- Session state is compacted periodically and mirrored to `memory.md`.
 
 ## Requirements
 
@@ -32,6 +34,7 @@ Edit `.env` with at least:
 - `TELEGRAM_DEFAULT_CHAT_ID` (for cron delivery)
 - `TELEGRAM_LOG_ENABLED=true`
 - `TELEGRAM_LOG_PATH=logs/telegram_history.jsonl`
+- Optional but recommended: `CODEX_USAGE_LIMIT_5H`, `CODEX_USAGE_LIMIT_1W`
 - Optional routing/settings values
 
 ## Run
@@ -71,18 +74,26 @@ launchctl print gui/$(id -u)/com.westlee.openclaw_codex.telegram.bridge
 - `/help`
 - `/status`
 - `/mode auto|claw|codex|hybrid`
+- `/session`
+- `/resume <session_id>`
+- `/newsession`
+- `/memory`
 
 ## Conversation Logs
 
 Bridge and cron Telegram messages are appended to JSONL:
 
 - `logs/telegram_history.jsonl`
+- `logs/codex_usage.jsonl` (token usage ledger)
+- `logs/sessions/<chat_id>/state.json` (session + resume state)
+- `logs/sessions/<chat_id>/memory.md` (compacted memory)
 
 Quick check:
 
 ```bash
 cd /Users/westlee/Projects/openclaw-codex-telegram-bridge
 tail -n 20 logs/telegram_history.jsonl
+tail -n 20 logs/codex_usage.jsonl
 ```
 
 ## Cron Jobs (one-shot)
