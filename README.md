@@ -41,6 +41,29 @@ python3 bridge.py
 
 `bridge.py` auto-loads `.env` in the current directory.
 
+## Auto Start (launchd, macOS)
+
+The LaunchAgent plist is included as:
+
+- `launchd.com.westlee.openclaw_codex.telegram.bridge.plist`
+
+Install and start:
+
+```bash
+cd /Users/westlee/Projects/openclaw-codex-telegram-bridge
+cp launchd.com.westlee.openclaw_codex.telegram.bridge.plist ~/Library/LaunchAgents/com.westlee.openclaw_codex.telegram.bridge.plist
+launchctl bootout gui/$(id -u)/com.westlee.openclaw_codex.telegram.bridge 2>/dev/null || true
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.westlee.openclaw_codex.telegram.bridge.plist
+launchctl enable gui/$(id -u)/com.westlee.openclaw_codex.telegram.bridge
+launchctl kickstart -k gui/$(id -u)/com.westlee.openclaw_codex.telegram.bridge
+```
+
+Check status:
+
+```bash
+launchctl print gui/$(id -u)/com.westlee.openclaw_codex.telegram.bridge
+```
+
 ## Telegram Commands
 
 - `/help`
