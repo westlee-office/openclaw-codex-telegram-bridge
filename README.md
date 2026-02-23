@@ -14,6 +14,7 @@ This is a minimal Telegram bot bridge that routes replies through:
 - In `codex` mode, each chat keeps a persistent Codex session id and auto-resumes.
 - Session state is compacted periodically and mirrored to `memory.md`.
 - Replies append a `context left` footer (estimated from latest Codex usage).
+- Recommended default model profile: `gpt-5.3-codex` + `model_reasoning_effort="xhigh"`.
 
 ## Requirements
 
