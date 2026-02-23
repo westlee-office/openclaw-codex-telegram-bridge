@@ -1,0 +1,6 @@
+.env
+*.log
+logs/
+__pycache__/
+.cron_history.json
+.DS_Store
