@@ -9,7 +9,14 @@ import os
 import sys
 from typing import Dict, List, Tuple
 
-from bridge import ALLOWED_MODES, Config, load_dotenv, route_answer, send_message
+from bridge import (
+    ALLOWED_MODES,
+    Config,
+    load_dotenv,
+    log_telegram_event,
+    route_answer,
+    send_message,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -148,6 +155,18 @@ def main() -> int:
         if not cfg.telegram_token:
             raise ValueError("TELEGRAM_BOT_TOKEN is required when chat id is used")
         send_message(cfg.telegram_token, target_chat_id, final)
+        log_telegram_event(
+            cfg.telegram_log_enabled,
+            cfg.telegram_log_path,
+            "cron_outgoing",
+            {
+                "chat_id": target_chat_id,
+                "mode": mode,
+                "route_tag": route_tag,
+                "prompt": prompt,
+                "text": final,
+            },
+        )
 
     print(final)
 

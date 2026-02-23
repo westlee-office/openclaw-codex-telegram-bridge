@@ -30,6 +30,8 @@ Edit `.env` with at least:
 
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_DEFAULT_CHAT_ID` (for cron delivery)
+- `TELEGRAM_LOG_ENABLED=true`
+- `TELEGRAM_LOG_PATH=logs/telegram_history.jsonl`
 - Optional routing/settings values
 
 ## Run
@@ -69,6 +71,19 @@ launchctl print gui/$(id -u)/com.westlee.openclaw_codex.telegram.bridge
 - `/help`
 - `/status`
 - `/mode auto|claw|codex|hybrid`
+
+## Conversation Logs
+
+Bridge and cron Telegram messages are appended to JSONL:
+
+- `logs/telegram_history.jsonl`
+
+Quick check:
+
+```bash
+cd /Users/westlee/Projects/openclaw-codex-telegram-bridge
+tail -n 20 logs/telegram_history.jsonl
+```
 
 ## Cron Jobs (one-shot)
 

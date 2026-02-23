@@ -13,6 +13,7 @@ import tempfile
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -47,6 +48,8 @@ class Config:
     allowed_chat_ids: Optional[set]
     router_mode: str
     show_route_debug: bool
+    telegram_log_enabled: bool
+    telegram_log_path: str
     history_turns: int
     telegram_poll_timeout: int
     telegram_retry_sleep: float
@@ -91,6 +94,11 @@ class Config:
             allowed_chat_ids=allowed,
             router_mode=mode,
             show_route_debug=env_bool("SHOW_ROUTE_DEBUG", False),
+            telegram_log_enabled=env_bool("TELEGRAM_LOG_ENABLED", True),
+            telegram_log_path=(
+                os.getenv("TELEGRAM_LOG_PATH", "logs/telegram_history.jsonl").strip()
+                or "logs/telegram_history.jsonl"
+            ),
             history_turns=max(0, env_int("HISTORY_TURNS", 4)),
             telegram_poll_timeout=max(1, env_int("TELEGRAM_POLL_TIMEOUT", 25)),
             telegram_retry_sleep=max(0.2, env_float("TELEGRAM_RETRY_SLEEP", 2.0)),
@@ -172,6 +180,38 @@ def parse_chat_ids(raw: str) -> Optional[set]:
     return chat_ids
 
 
+def utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def append_jsonl_atomic(path: str, payload: dict) -> None:
+    if not path:
+        return
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    raw = (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o644)
+    try:
+        view = memoryview(raw)
+        while view:
+            written = os.write(fd, view)
+            view = view[written:]
+    finally:
+        os.close(fd)
+
+
+def log_telegram_event(enabled: bool, path: str, event_type: str, payload: dict) -> None:
+    if not enabled:
+        return
+    record = {"ts_utc": utc_now_iso(), "event": event_type}
+    record.update(payload)
+    try:
+        append_jsonl_atomic(path, record)
+    except Exception as exc:
+        print(f"[warn] telegram logging failed: {exc}", file=sys.stderr)
+
+
 def tg_request(token: str, method: str, payload: dict) -> dict:
     url = f"https://api.telegram.org/bot{token}/{method}"
     data = json.dumps(payload).encode("utf-8")
@@ -211,6 +251,21 @@ def send_typing(token: str, chat_id: int) -> None:
         tg_request(token, "sendChatAction", {"chat_id": chat_id, "action": "typing"})
     except Exception:
         pass
+
+
+def send_and_log(
+    cfg: Config,
+    chat_id: int,
+    text: str,
+    *,
+    kind: str,
+    extra: Optional[dict] = None,
+) -> None:
+    send_message(cfg.telegram_token, chat_id, text)
+    payload = {"kind": kind, "chat_id": chat_id, "text": text}
+    if extra:
+        payload.update(extra)
+    log_telegram_event(cfg.telegram_log_enabled, cfg.telegram_log_path, "outgoing", payload)
 
 
 def extract_openclaw_text(stdout: str) -> str:
@@ -523,6 +578,7 @@ def main() -> int:
             if isinstance(update_id, int):
                 offset = update_id + 1
 
+            is_edited = "edited_message" in update
             message = update.get("message") or update.get("edited_message")
             if not isinstance(message, dict):
                 continue
@@ -537,33 +593,84 @@ def main() -> int:
             if not text:
                 continue
 
+            sender = message.get("from") if isinstance(message.get("from"), dict) else {}
+            msg_id = message.get("message_id")
+            incoming_meta = {
+                "chat_id": chat_id,
+                "chat_type": chat.get("type"),
+                "chat_title": chat.get("title"),
+                "chat_username": chat.get("username"),
+                "from_id": sender.get("id"),
+                "from_username": sender.get("username"),
+                "from_first_name": sender.get("first_name"),
+                "message_id": msg_id,
+                "telegram_date": message.get("date"),
+                "update_id": update_id,
+                "is_edited": is_edited,
+                "text": text,
+            }
+            log_telegram_event(
+                cfg.telegram_log_enabled,
+                cfg.telegram_log_path,
+                "incoming",
+                incoming_meta,
+            )
+
             if cfg.allowed_chat_ids is not None and chat_id not in cfg.allowed_chat_ids:
+                log_telegram_event(
+                    cfg.telegram_log_enabled,
+                    cfg.telegram_log_path,
+                    "incoming_ignored",
+                    {"chat_id": chat_id, "update_id": update_id, "reason": "chat_not_allowed"},
+                )
                 continue
 
             if text.startswith("/start") or text.startswith("/help"):
-                send_message(cfg.telegram_token, chat_id, command_help(cfg.router_mode))
+                help_text = command_help(cfg.router_mode)
+                send_and_log(
+                    cfg,
+                    chat_id,
+                    help_text,
+                    kind="command_reply",
+                    extra={"command": "help", "update_id": update_id, "reply_to_message_id": msg_id},
+                )
                 continue
 
             if text.startswith("/mode"):
                 parts = text.split()
                 if len(parts) == 2 and parts[1].lower() in ALLOWED_MODES:
                     mode_by_chat[chat_id] = parts[1].lower()
-                    send_message(cfg.telegram_token, chat_id, f"Mode set to: {mode_by_chat[chat_id]}")
+                    send_and_log(
+                        cfg,
+                        chat_id,
+                        f"Mode set to: {mode_by_chat[chat_id]}",
+                        kind="command_reply",
+                        extra={"command": "mode", "update_id": update_id, "reply_to_message_id": msg_id},
+                    )
                 else:
-                    send_message(chat_id=chat_id, token=cfg.telegram_token, text="Usage: /mode auto|claw|codex|hybrid")
+                    send_and_log(
+                        cfg,
+                        chat_id,
+                        "Usage: /mode auto|claw|codex|hybrid",
+                        kind="command_reply",
+                        extra={"command": "mode", "update_id": update_id, "reply_to_message_id": msg_id},
+                    )
                 continue
 
             if text.startswith("/status"):
                 active_mode = mode_by_chat.get(chat_id, cfg.router_mode)
-                send_message(
-                    cfg.telegram_token,
+                status_text = (
+                    f"mode={active_mode}\n"
+                    f"history_turns={cfg.history_turns}\n"
+                    f"openclaw_agent={cfg.openclaw_agent}\n"
+                    f"codex_workdir={cfg.codex_workdir}"
+                )
+                send_and_log(
+                    cfg,
                     chat_id,
-                    (
-                        f"mode={active_mode}\n"
-                        f"history_turns={cfg.history_turns}\n"
-                        f"openclaw_agent={cfg.openclaw_agent}\n"
-                        f"codex_workdir={cfg.codex_workdir}"
-                    ),
+                    status_text,
+                    kind="command_reply",
+                    extra={"command": "status", "update_id": update_id, "reply_to_message_id": msg_id},
                 )
                 continue
 
@@ -586,7 +693,18 @@ def main() -> int:
             if max_items > 0 and len(history[chat_id]) > max_items:
                 history[chat_id] = history[chat_id][-max_items:]
 
-            send_message(cfg.telegram_token, chat_id, answer)
+            send_and_log(
+                cfg,
+                chat_id,
+                answer,
+                kind="assistant_reply",
+                extra={
+                    "mode": active_mode,
+                    "route_tag": route_tag,
+                    "update_id": update_id,
+                    "reply_to_message_id": msg_id,
+                },
+            )
 
     return 0
 
